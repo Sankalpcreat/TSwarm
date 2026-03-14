@@ -12,13 +12,16 @@ export type TreeNode = {
 type Props = {
   onOpenPath?: (path: string) => void;
   onRootChange?: (path: string) => void;
+  sessions?: { id: string; name: string; active: boolean }[];
+  onSelectSession?: (id: string) => void;
+  onRenameSession?: (id: string, name: string) => void;
 };
 
 function buildNodes(entries: FileEntry[]): TreeNode[] {
   return entries.map((entry) => ({ entry }));
 }
 
-export function FileTree({ onOpenPath, onRootChange }: Props) {
+export function FileTree({ onOpenPath, onRootChange, sessions = [], onSelectSession, onRenameSession }: Props) {
   const [rootPath, setRootPath] = useState('');
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -111,6 +114,27 @@ export function FileTree({ onOpenPath, onRootChange }: Props) {
         />
       </form>
       <div className="sidebar-tree">{treeContent}</div>
+      <div className="sidebar-sessions">
+        <div className="sidebar-title">Sessions</div>
+        <div className="session-list">
+          {sessions.length === 0 && <div className="session-empty">No sessions</div>}
+          {sessions.map((session, idx) => (
+            <div
+              key={session.id}
+              className={`session-row ${session.active ? 'active' : ''}`}
+              onClick={() => onSelectSession?.(session.id)}
+              onDoubleClick={() => {
+                const next = window.prompt('Rename session', session.name);
+                if (next && next.trim()) onRenameSession?.(session.id, next.trim());
+              }}
+              title="Click to focus, double-click to rename"
+            >
+              <span className="session-index">{idx + 1}.</span>
+              <span className="session-name">{session.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

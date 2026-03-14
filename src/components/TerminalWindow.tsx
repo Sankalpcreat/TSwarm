@@ -16,9 +16,10 @@ type Props = {
   onResize: (id: string, width: number, height: number) => void;
   onFocus: (id: string) => void;
   onClose: (id: string) => void;
+  onRename: (id: string, name: string) => void;
 };
 
-export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, onClose }: Props) {
+export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, onClose, onRename }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -209,7 +210,17 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
       }}
     >
       <div className="terminal-header" ref={headerRef}>
-        <div className="terminal-title">{win.title}</div>
+        <div
+          className="terminal-title"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            const next = window.prompt('Rename session', win.name);
+            if (next && next.trim()) onRename(win.id, next.trim());
+          }}
+          title="Double-click to rename"
+        >
+          {win.name}
+        </div>
         <div className="terminal-actions">
           <button
             className="close-btn"

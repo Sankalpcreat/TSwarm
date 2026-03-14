@@ -138,6 +138,8 @@ fn create_session(
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "canvas-terminal");
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    cmd.env_remove("npm_config_prefix");
+    cmd.env_remove("NPM_CONFIG_PREFIX");
 
     if !cfg!(windows) {
         if shell.ends_with("zsh") {

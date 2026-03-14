@@ -10,6 +10,7 @@ export type WindowItem = {
   id: string;
   sessionId: string;
   title: string;
+  name: string;
   x: number;
   y: number;
   width: number;

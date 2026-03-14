@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { FileTree } from './components/FileTree';
 import { TerminalWindow } from './components/TerminalWindow';
 import type { CanvasTransform, WindowItem } from './types';
+import { createVoiceController } from './voice';
 import './App.css';
 
 const MIN_SCALE = 0.25;
@@ -14,11 +15,17 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string>('');
   const [logs, setLogs] = useState<string[]>([]);
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
   const zRef = useRef(10);
   const spawnedRef = useRef(false);
+  const windowsRef = useRef<WindowItem[]>([]);
+  const activeIdRef = useRef<string | null>(null);
+  const rootPathRef = useRef<string>('');
+  const voiceRef = useRef<ReturnType<typeof createVoiceController> | null>(null);
 
   useEffect(() => {
     (window as any).__addLog = (m: string) => {
@@ -48,6 +55,18 @@ export default function App() {
       window.removeEventListener('pointerup', onPointerUp);
     };
   }, []);
+
+  useEffect(() => {
+    windowsRef.current = windows;
+  }, [windows]);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    rootPathRef.current = rootPath;
+  }, [rootPath]);
 
   const isBackgroundTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return true;
@@ -96,14 +115,15 @@ export default function App() {
     return { x, y };
   };
 
-  const spawnTerminal = async (x: number, y: number) => {
+  const spawnTerminal = async (x: number, y: number, nameOverride?: string) => {
     (window as any).__addLog?.('spawning terminal...');
     const session = await invoke<{ id: string }>('create_session', {
       shell: null,
-      cwd: rootPath || null,
+      cwd: rootPathRef.current || null,
     });
 
     const id = session.id;
+    const name = nameOverride || `term-${windowsRef.current.length + 1}`;
     zRef.current += 1;
     const newWindow: WindowItem = {
       id,
@@ -111,6 +131,7 @@ export default function App() {
       y,
       z: zRef.current,
       title: 'Terminal',
+      name,
       sessionId: session.id,
       width: 520,
       height: 320,
@@ -162,6 +183,39 @@ export default function App() {
     });
   };
 
+  const handleRename = (id: string, name: string) => {
+    updateWindow(id, { name });
+  };
+
+  const toggleVoice = async () => {
+    if (!voiceRef.current) {
+      voiceRef.current = createVoiceController({
+        getWindows: () => windowsRef.current,
+        getActiveId: () => activeIdRef.current,
+        spawnTerminal: (x, y, name) => spawnTerminal(x, y, name),
+        focusTerminal: handleFocus,
+        renameTerminal: handleRename,
+        closeTerminal: handleClose,
+        log: (msg) => invoke('log_frontend', { message: msg }).catch(() => {}),
+      });
+    }
+
+    if (voiceActive) {
+      await voiceRef.current.stop();
+      setVoiceActive(false);
+      return;
+    }
+
+    try {
+      setVoiceError(null);
+      await voiceRef.current.start();
+      setVoiceActive(true);
+    } catch (err: any) {
+      setVoiceError(err?.message || 'Voice start failed');
+      setVoiceActive(false);
+    }
+  };
+
   const canvasStyle = useMemo(() => {
     return {
       transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
@@ -170,13 +224,26 @@ export default function App() {
 
   return (
     <div className="app">
-      <FileTree onRootChange={setRootPath} />
+      <FileTree
+        onRootChange={setRootPath}
+        sessions={windows.map((win) => ({ id: win.id, name: win.name, active: activeId === win.id }))}
+        onSelectSession={handleFocus}
+        onRenameSession={handleRename}
+      />
 
       <div className="topbar">
+        <button
+          className={`btn voice-btn ${voiceActive ? 'active' : ''}`}
+          onClick={toggleVoice}
+          title={voiceActive ? 'Stop voice control' : 'Start voice control'}
+        >
+          {voiceActive ? 'Voice: On' : 'Voice: Off'}
+        </button>
         <button
           className="btn" onClick={handleNewTerminal}>
           + New Terminal
         </button>
+        {voiceError && <div className="voice-error">{voiceError}</div>}
         <div className="zoom">
           <span>Zoom</span>
           <span>{Math.round(transform.scale * 100)}%</span>
@@ -201,6 +268,7 @@ export default function App() {
               onResize={(id, width, height) => updateWindow(id, { width, height })}
               onFocus={handleFocus}
               onClose={handleClose}
+              onRename={handleRename}
             />
           ))}
         </div>

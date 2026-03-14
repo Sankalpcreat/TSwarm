@@ -18,6 +18,47 @@ const pending = new Map<string, string>();
 let listening = false;
 
 const MAX_BUFFER = 200_000; // chars
+const MAX_OUTPUT_LINES = 2000;
+
+type OutputBuffer = {
+  lines: string[];
+  tail: string;
+};
+
+const outputBuffers = new Map<string, OutputBuffer>();
+
+function stripAnsi(text: string) {
+  return text
+    // CSI sequences
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    // OSC sequences
+    .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, '')
+    // Other escape sequences
+    .replace(/\x1b[@-Z\\-_]/g, '');
+}
+
+function sanitizeText(text: string) {
+  const cleaned = stripAnsi(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+  return cleaned.replace(/[^\x09\x0A\x20-\x7E]/g, '');
+}
+
+function appendOutput(id: string, data: string) {
+  const cleaned = sanitizeText(data);
+  if (!cleaned) return;
+  const buffer = outputBuffers.get(id) || { lines: [], tail: '' };
+  const combined = buffer.tail + cleaned;
+  const parts = combined.split('\n');
+  buffer.tail = parts.pop() ?? '';
+  for (const line of parts) {
+    buffer.lines.push(line);
+  }
+  if (buffer.lines.length > MAX_OUTPUT_LINES) {
+    buffer.lines = buffer.lines.slice(-MAX_OUTPUT_LINES);
+  }
+  outputBuffers.set(id, buffer);
+}
 
 function scheduleFlush(id: string) {
   const record = terminals.get(id);
@@ -39,6 +80,7 @@ export async function initTerminalEvents() {
   await listen<TerminalDataEvent>('terminal:data', (event) => {
     const { id, data } = event.payload;
     (window as any).__addLog?.(`IPC_RECV ${id.slice(0,5)} len=${data.length}`);
+    appendOutput(id, data);
     const record = terminals.get(id);
     if (!record) {
       console.log(`[IPC] Received data for non-existent terminal ${id}`);
@@ -81,4 +123,11 @@ export function setTerminalPaused(id: string, paused: boolean) {
   if (!record) return;
   record.paused = paused;
   if (!paused) scheduleFlush(id);
+}
+
+export function getTerminalOutput(id: string, lines = 50) {
+  const buffer = outputBuffers.get(id);
+  if (!buffer) return { lines: [], text: '' };
+  const slice = buffer.lines.slice(-Math.max(1, lines));
+  return { lines: slice, text: slice.join('\n') };
 }
