@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { FileTree } from './components/FileTree';
 import { TerminalWindow } from './components/TerminalWindow';
@@ -14,9 +14,6 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string>('');
   const [logs, setLogs] = useState<string[]>([]);
-  
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
@@ -165,63 +162,6 @@ export default function App() {
     });
   };
 
-  const handleVoiceCommand = useCallback((text: string) => {
-    if (!activeId) return;
-    const win = windows.find((w) => w.id === activeId);
-    if (!win) return;
-
-    // Send text + enter key
-    invoke('write_session', { id: win.sessionId, data: text + '\r' }).catch((err) => {
-      console.error('Failed to send voice command', err);
-    });
-  }, [activeId, windows]);
-
-  useEffect(() => {
-    // Initialize Speech Recognition
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognitionAPI) {
-      const recognition = new SpeechRecognitionAPI();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event) => {
-        const script = event.results[0][0].transcript;
-        console.log('[Voice]', script);
-        invoke('log_frontend', { message: `Voice transcribed: ${script}` }).catch(()=>{});;
-        handleVoiceCommand(script);
-      };
-
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error', event.error);
-        invoke('log_frontend', { message: `Voice error: ${event.error}` }).catch(()=>{});;
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
-    } else {
-      console.warn('Speech Recognition API not supported in this browser/environment.');
-    }
-  }, [handleVoiceCommand]);
-
-  const toggleListening = () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current?.start();
-        setIsListening(true);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  };
-
   const canvasStyle = useMemo(() => {
     return {
       transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
@@ -233,14 +173,6 @@ export default function App() {
       <FileTree onRootChange={setRootPath} />
 
       <div className="topbar">
-        <button
-           className="btn microphone-btn"
-           onClick={toggleListening}
-           style={{ background: isListening ? 'rgba(255, 0, 0, 0.2)' : undefined, borderColor: isListening ? 'rgba(255, 0, 0, 0.5)' : undefined, marginRight: 8 }}
-           title={isListening ? 'Stop Listening' : 'Speak a command'}
-        >
-          {isListening ? '🔴 Recording...' : '🎤 Voice Command'}
-        </button>
         <button
           className="btn" onClick={handleNewTerminal}>
           + New Terminal
