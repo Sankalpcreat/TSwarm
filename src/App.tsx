@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { isRegistered, register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { FileTree } from './components/FileTree';
 import { TerminalWindow } from './components/TerminalWindow';
 import type { CanvasTransform, WindowItem } from './types';
@@ -8,6 +9,7 @@ import './App.css';
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 2.5;
+const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space';
 
 export default function App() {
   const [transform, setTransform] = useState<CanvasTransform>({ x: 80, y: 80, scale: 1 });
@@ -17,6 +19,8 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [shortcut, setShortcut] = useState<string>(DEFAULT_SHORTCUT);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
@@ -26,6 +30,7 @@ export default function App() {
   const activeIdRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>('');
   const voiceRef = useRef<ReturnType<typeof createVoiceController> | null>(null);
+  const toggleVoiceRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     (window as any).__addLog = (m: string) => {
@@ -67,6 +72,13 @@ export default function App() {
   useEffect(() => {
     rootPathRef.current = rootPath;
   }, [rootPath]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem('voiceShortcut');
+    if (stored && stored.trim()) {
+      setShortcut(stored.trim());
+    }
+  }, []);
 
   const isBackgroundTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return true;
@@ -216,6 +228,49 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    toggleVoiceRef.current = () => {
+      toggleVoice().catch((err) => {
+        console.error('toggleVoice failed', err);
+      });
+    };
+  }, [toggleVoice]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const setupShortcut = async () => {
+      if (!shortcut) return;
+      try {
+        setShortcutError(null);
+        if (await isRegistered(shortcut)) {
+          await unregister(shortcut);
+        }
+        await register(shortcut, () => toggleVoiceRef.current());
+      } catch (err: any) {
+        if (!cancelled) {
+          setShortcutError(err?.message || 'Failed to register shortcut');
+        }
+      }
+    };
+    setupShortcut();
+
+    return () => {
+      cancelled = true;
+      if (shortcut) {
+        unregister(shortcut).catch(() => {});
+      }
+    };
+  }, [shortcut]);
+
+  const promptShortcut = () => {
+    const next = window.prompt('Set global shortcut (e.g. CommandOrControl+Shift+Space)', shortcut);
+    if (!next) return;
+    const trimmed = next.trim();
+    if (!trimmed) return;
+    window.localStorage.setItem('voiceShortcut', trimmed);
+    setShortcut(trimmed);
+  };
+
   const canvasStyle = useMemo(() => {
     return {
       transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
@@ -239,11 +294,19 @@ export default function App() {
         >
           {voiceActive ? 'Voice: On' : 'Voice: Off'}
         </button>
+        <div className="shortcut">
+          <span>Shortcut</span>
+          <span className="shortcut-key">{shortcut}</span>
+          <button className="btn" onClick={promptShortcut}>
+            Set Shortcut
+          </button>
+        </div>
         <button
           className="btn" onClick={handleNewTerminal}>
           + New Terminal
         </button>
         {voiceError && <div className="voice-error">{voiceError}</div>}
+        {shortcutError && <div className="voice-error">{shortcutError}</div>}
         <div className="zoom">
           <span>Zoom</span>
           <span>{Math.round(transform.scale * 100)}%</span>

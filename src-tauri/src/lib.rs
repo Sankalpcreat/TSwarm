@@ -280,6 +280,14 @@ fn log_frontend(message: String) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+            }
+            Ok(())
+        })
         .manage(SessionState::new())
         .invoke_handler(tauri::generate_handler![
             default_root,
