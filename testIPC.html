@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>IPC Test</h1>
+  <script type="module">
+    import { invoke } from '@tauri-apps/api/core';
+    invoke('default_root').then(r => {
+      document.body.innerHTML += `<p>Root: ${r}</p>`;
+      fetch('http://localhost:4444', { method: 'POST', body: 'Root: ' + r }).catch(()=>{});
+    }).catch(e => {
+        fetch('http://localhost:4444', { method: 'POST', body: 'Err: ' + e }).catch(()=>{});
+    });
+  </script>
+</body>
+</html>
