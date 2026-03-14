@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { isRegistered, register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { FileTree } from './components/FileTree';
 import { TerminalWindow } from './components/TerminalWindow';
@@ -9,7 +10,7 @@ import './App.css';
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 2.5;
-const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space';
+const DEFAULT_SHORTCUT = 'Fn';
 
 export default function App() {
   const [transform, setTransform] = useState<CanvasTransform>({ x: 80, y: 80, scale: 1 });
@@ -21,6 +22,7 @@ export default function App() {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState<string>(DEFAULT_SHORTCUT);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [shortcutHint, setShortcutHint] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
@@ -31,6 +33,7 @@ export default function App() {
   const rootPathRef = useRef<string>('');
   const voiceRef = useRef<ReturnType<typeof createVoiceController> | null>(null);
   const toggleVoiceRef = useRef<() => void>(() => {});
+  const lastGlobalShortcutRef = useRef<string | null>(null);
 
   useEffect(() => {
     (window as any).__addLog = (m: string) => {
@@ -76,7 +79,8 @@ export default function App() {
   useEffect(() => {
     const stored = window.localStorage.getItem('voiceShortcut');
     if (stored && stored.trim()) {
-      setShortcut(stored.trim());
+      const trimmed = stored.trim();
+      setShortcut(trimmed);
     }
   }, []);
 
@@ -236,19 +240,43 @@ export default function App() {
     };
   }, [toggleVoice]);
 
+  const normalizeShortcut = (value: string) => value.toLowerCase().replace(/\s+/g, '');
+  const getFnMode = (value: string) => {
+    const normalized = normalizeShortcut(value);
+    if (normalized === 'fn') return 'fn';
+    if (normalized === 'fn+space' || normalized === 'fnspace') return 'fn_space';
+    return null;
+  };
+
   useEffect(() => {
     let cancelled = false;
     const setupShortcut = async () => {
       if (!shortcut) return;
       try {
         setShortcutError(null);
+        setShortcutHint(null);
+        const fnMode = getFnMode(shortcut);
+        if (fnMode) {
+          if (lastGlobalShortcutRef.current) {
+            await unregister(lastGlobalShortcutRef.current).catch(() => {});
+            lastGlobalShortcutRef.current = null;
+          }
+          if (!cancelled) {
+            setShortcutHint('Fn hotkey active (requires Accessibility permission).');
+          }
+          await invoke('set_fn_hotkey_mode', { mode: fnMode });
+          return;
+        }
+        await invoke('set_fn_hotkey_mode', { mode: 'off' });
         if (await isRegistered(shortcut)) {
           await unregister(shortcut);
         }
         await register(shortcut, () => toggleVoiceRef.current());
+        lastGlobalShortcutRef.current = shortcut;
+        setShortcutHint('Global shortcut active');
       } catch (err: any) {
         if (!cancelled) {
-          setShortcutError(err?.message || 'Failed to register shortcut');
+          setShortcutError(err?.message || 'Failed to register shortcut. Try F19 or CommandOrControl+Alt+Shift+K.');
         }
       }
     };
@@ -256,20 +284,35 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      if (shortcut) {
-        unregister(shortcut).catch(() => {});
-      }
+      if (shortcut) unregister(shortcut).catch(() => {});
     };
   }, [shortcut]);
 
   const promptShortcut = () => {
-    const next = window.prompt('Set global shortcut (e.g. CommandOrControl+Shift+Space)', shortcut);
+    const next = window.prompt('Set shortcut (e.g. Fn, Fn+Space, CommandOrControl+Shift+K)', shortcut);
     if (!next) return;
     const trimmed = next.trim();
     if (!trimmed) return;
     window.localStorage.setItem('voiceShortcut', trimmed);
     setShortcut(trimmed);
   };
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let unlistenErr: (() => void) | null = null;
+    const setup = async () => {
+      unlisten = await listen('fn-hotkey', () => toggleVoiceRef.current());
+      unlistenErr = await listen('fn-hotkey-error', (event) => {
+        const msg = typeof event.payload === 'string' ? event.payload : 'Fn hotkey error';
+        setShortcutError(msg);
+      });
+    };
+    setup();
+    return () => {
+      unlisten?.();
+      unlistenErr?.();
+    };
+  }, []);
 
   const canvasStyle = useMemo(() => {
     return {
@@ -306,6 +349,7 @@ export default function App() {
           + New Terminal
         </button>
         {voiceError && <div className="voice-error">{voiceError}</div>}
+        {shortcutHint && <div className="shortcut-hint">{shortcutHint}</div>}
         {shortcutError && <div className="voice-error">{shortcutError}</div>}
         <div className="zoom">
           <span>Zoom</span>

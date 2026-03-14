@@ -255,6 +255,12 @@ body,
   color: var(--text-primary);
 }
 
+.shortcut-hint {
+  font-size: 11px;
+  color: #9ae6b4;
+  margin-left: 8px;
+}
+
 .zoom {
   display: flex;
   gap: 12px;

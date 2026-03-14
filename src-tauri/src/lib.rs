@@ -10,6 +10,8 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+mod fn_hotkey;
+
 struct Session {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -276,6 +278,15 @@ fn log_frontend(message: String) {
     println!("[FRONTEND] {}", message);
 }
 
+#[tauri::command]
+fn set_fn_hotkey_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        fn_hotkey::set_mode(app, &mode);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -296,7 +307,8 @@ pub fn run() {
             write_session,
             resize_session,
             close_session,
-            log_frontend
+            log_frontend,
+            set_fn_hotkey_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
