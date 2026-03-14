@@ -1,11 +1,14 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap');
 
 :root {
+  --bg-0: #0a0b10;
   --bg-gradient-start: #0a0b10;
   --bg-gradient-end: #0a0b10;
-  --panel-bg: #12141a;
+  --panel-bg: #0b0d12;
   --panel-border: rgba(255, 255, 255, 0.05);
   --glass-border: rgba(255, 255, 255, 0.08);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
   --text-primary: #e2e8f0;
   --text-muted: #94a3b8;
   --accent: #2aa6ff;
@@ -92,7 +95,7 @@ body,
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(12, 14, 18, 0.9);
+  background: #07090c;
   color: var(--text-primary);
   font-size: 13px;
 }
@@ -153,6 +156,9 @@ body,
   padding: 0 16px;
   z-index: 1000;
   pointer-events: none;
+  background: rgba(11, 13, 18, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
 }
 
 .topbar > * {
@@ -186,8 +192,8 @@ body,
 
 .terminal-window {
   position: absolute;
-  background: #12141a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0f1117;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.6);
@@ -208,8 +214,8 @@ body,
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: #0f1117;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   cursor: grab;
 }
 
@@ -246,7 +252,7 @@ body,
   flex: 1;
   width: 100%;
   padding: 6px;
-  background: #0a0b10;
+  background: #0f1117;
 }
 
 .terminal-body .xterm {

@@ -1,7 +1,20 @@
-# Tauri + React + Typescript
+# TSwarm
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+![TSwarm UI](docs/fdg.png)
 
-## Recommended IDE Setup
+## One‑Command Install
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+### macOS / Linux
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sankalpcreat/TSwarm/main/scripts/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+iwr -useb https://raw.githubusercontent.com/Sankalpcreat/TSwarm/main/scripts/install.ps1 | iex
+```
+
+## Notes
+- This installs the latest GitHub Release build.
+- macOS installs into `/Applications`.
+- Linux installs into `~/.local/bin/` (make sure it’s in your PATH).
