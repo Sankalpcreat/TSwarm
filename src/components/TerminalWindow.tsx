@@ -69,7 +69,7 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
         invoke('resize_session', { id: win.sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
       }
       setTimeout(() => {
-        term.focus();
+        term?.focus();
       }, 0);
 
       term.onData((data) => {

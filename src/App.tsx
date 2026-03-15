@@ -57,12 +57,10 @@ export default function App() {
   const [windows, setWindows] = useState<WindowItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string>('');
-  const [logs, setLogs] = useState<string[]>([]);
   const [voiceActive, setVoiceActive] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState<string>(DEFAULT_SHORTCUT);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
-  const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -697,20 +695,15 @@ export default function App() {
           lastGlobalShortcutRef.current = null;
         }
         await invoke('set_fn_hotkey_mode', { mode: 'off' });
-        setShortcutHint('Voice disabled');
         return;
       }
       try {
         setShortcutError(null);
-        setShortcutHint(null);
         const fnMode = getFnMode(shortcut);
         if (fnMode) {
           if (lastGlobalShortcutRef.current) {
             await unregister(lastGlobalShortcutRef.current).catch(() => {});
             lastGlobalShortcutRef.current = null;
-          }
-          if (!cancelled) {
-            setShortcutHint('Fn hotkey active (requires Accessibility permission).');
           }
           await invoke('set_fn_hotkey_mode', { mode: fnMode });
           return;
@@ -721,7 +714,6 @@ export default function App() {
         }
         await register(shortcut, () => toggleVoiceRef.current());
         lastGlobalShortcutRef.current = shortcut;
-        setShortcutHint('Global shortcut active');
       } catch (err: any) {
         if (!cancelled) {
           setShortcutError(err?.message || 'Failed to register shortcut. Try F19 or CommandOrControl+Alt+Shift+K.');
@@ -875,10 +867,7 @@ export default function App() {
               setVoiceEnabled((prev) => {
                 const next = !prev;
                 if (!next) {
-                  setShortcutHint('Voice disabled');
                   setShortcutError(null);
-                } else {
-                  setShortcutHint(null);
                 }
                 return next;
               });

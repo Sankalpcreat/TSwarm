@@ -15,6 +15,7 @@ export type VoiceControllerOptions = {
 };
 
 type LiveSession = any;
+type TerminalWindowItem = WindowItem & { type: 'terminal'; sessionId: string };
 
 const TARGET_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
@@ -87,7 +88,7 @@ function normalizeArgs(args: any) {
   return args;
 }
 
-function findSessionBySelector(windows: WindowItem[], selector: { id?: string; name?: string; index?: number }) {
+function findSessionBySelector(windows: TerminalWindowItem[], selector: { id?: string; name?: string; index?: number }) {
   if (selector.id) return windows.find((w) => w.id === selector.id) || null;
   if (selector.name) {
     const name = selector.name.toLowerCase();
@@ -220,9 +221,11 @@ export function createVoiceController(opts: VoiceControllerOptions) {
         },
       ],
     },
-  ];
+  ] as any;
 
-  const getTerminals = () => opts.getWindows().filter((w) => w.type === 'terminal');
+  const isTerminalWindow = (w: WindowItem): w is TerminalWindowItem =>
+    w.type === 'terminal' && typeof w.sessionId === 'string';
+  const getTerminals = () => opts.getWindows().filter(isTerminalWindow);
 
   async function handleToolCall(toolCall: any) {
     const responses = [] as any[];
