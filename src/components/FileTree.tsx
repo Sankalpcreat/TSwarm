@@ -10,6 +10,8 @@ export type TreeNode = {
 };
 
 type Props = {
+  rootPath: string;
+  onRootPathChange: (path: string) => void;
   onOpenPath?: (path: string) => void;
   onRootChange?: (path: string) => void;
   sessions?: { id: string; name: string; active: boolean }[];
@@ -102,6 +104,8 @@ const getFileKind = (name: string) => {
 };
 
 export function FileTree({
+  rootPath,
+  onRootPathChange,
   onOpenPath,
   onRootChange,
   sessions = [],
@@ -110,23 +114,23 @@ export function FileTree({
   sidebarOpen = true,
   onToggleSidebar,
 }: Props) {
-  const [rootPath, setRootPath] = useState('');
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   useEffect(() => {
     const loadRoot = async () => {
-      const root = await invoke<string>('default_root');
-      setRootPath(root);
-      onRootChange?.(root);
-      const entries = await invoke<FileEntry[]>('list_dir', { path: root });
+      if (!rootPath) {
+        setNodes([]);
+        return;
+      }
+      const entries = await invoke<FileEntry[]>('list_dir', { path: rootPath });
       setNodes(buildNodes(entries));
     };
 
     loadRoot().catch(() => {
       // ignore load errors for now
     });
-  }, []);
+  }, [rootPath]);
 
   const onToggle = async (node: TreeNode) => {
     setSelectedPath(node.entry.path);
@@ -201,7 +205,7 @@ export function FileTree({
         <input
           className="sidebar-input"
           value={rootPath}
-          onChange={(event) => setRootPath(event.target.value)}
+          onChange={(event) => onRootPathChange(event.target.value)}
           placeholder="/path/to/project"
         />
       </form>

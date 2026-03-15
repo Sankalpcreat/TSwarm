@@ -122,6 +122,13 @@ fn canvas_state_path(project_path: &str) -> Result<PathBuf, String> {
     Ok(dir.join(format!("{}.json", key)))
 }
 
+fn canvas_state_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let dir = PathBuf::from(home).join(".canvas-terminal").join("state");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
 #[tauri::command]
 fn save_canvas_state(project_path: String, state: String) -> Result<(), String> {
     let path = canvas_state_path(&project_path)?;
@@ -137,6 +144,63 @@ fn load_canvas_state(project_path: String) -> Result<Option<String>, String> {
     fs::read_to_string(path)
         .map(Some)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct SavedProject {
+    path: String,
+    name: String,
+    last_used: i64,
+}
+
+#[tauri::command]
+fn list_saved_projects() -> Result<Vec<SavedProject>, String> {
+    let dir = canvas_state_dir()?;
+    let mut projects: std::collections::HashMap<String, SavedProject> = std::collections::HashMap::new();
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = match serde_json::from_str(&data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let project_path = match value.get("projectPath").and_then(|v| v.as_str()) {
+            Some(p) if !p.is_empty() => p.to_string(),
+            _ => continue,
+        };
+        let last_used = value
+            .get("lastUsed")
+            .and_then(|v| v.as_i64())
+            .or_else(|| {
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+            })
+            .unwrap_or(0);
+        let name = project_path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(&project_path)
+            .to_string();
+        let item = SavedProject { path: project_path.clone(), name, last_used };
+        match projects.get(&project_path) {
+            Some(existing) if existing.last_used >= last_used => {}
+            _ => {
+                projects.insert(project_path.clone(), item);
+            }
+        }
+    }
+    let mut list: Vec<SavedProject> = projects.into_values().collect();
+    list.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+    Ok(list)
 }
 
 #[tauri::command]
@@ -720,6 +784,7 @@ pub fn run() {
             read_file_base64,
             save_canvas_state,
             load_canvas_state,
+            list_saved_projects,
             get_codex_latest_session,
             get_codex_recent_sessions,
             get_codex_threads_after,

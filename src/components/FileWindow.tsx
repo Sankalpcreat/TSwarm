@@ -59,7 +59,7 @@ export function FileWindow({ win, scale, active, onMove, onResize, onFocus, onCl
   const headerRef = useRef<HTMLDivElement | null>(null);
   const resizingRef = useRef(false);
   const draggingRef = useRef(false);
-  const startRef = useRef({ x: 0, y: 0, w: 0, h: 0, mx: 0, my: 0 });
+  const startRef = useRef({ x: 0, y: 0, w: 0, h: 0, mx: 0, my: 0, edge: 'right' as 'left' | 'right' });
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [text, setText] = useState('');
@@ -170,48 +170,69 @@ export function FileWindow({ win, scale, active, onMove, onResize, onFocus, onCl
   }, [scale, win.id, win.x, win.y, win.width, win.height, onMove, onFocus]);
 
   useEffect(() => {
-    const handle = document.getElementById(`resize-${win.id}`);
-    if (!handle) return;
+    const rightHandle = document.getElementById(`resize-${win.id}`);
+    const leftHandle = document.getElementById(`resize-left-${win.id}`);
+    if (!rightHandle && !leftHandle) return;
 
-    const onPointerDown = (e: PointerEvent) => {
-      resizingRef.current = true;
-      startRef.current = {
-        ...startRef.current,
-        mx: e.clientX,
-        my: e.clientY,
-        x: win.x,
-        y: win.y,
-        w: win.width,
-        h: win.height,
+    const attach = (handle: HTMLElement, edge: 'left' | 'right') => {
+      const onPointerDown = (e: PointerEvent) => {
+        resizingRef.current = true;
+        startRef.current = {
+          ...startRef.current,
+          mx: e.clientX,
+          my: e.clientY,
+          x: win.x,
+          y: win.y,
+          w: win.width,
+          h: win.height,
+          edge,
+        };
+        handle.setPointerCapture(e.pointerId);
+        onFocus(win.id);
       };
-      handle.setPointerCapture(e.pointerId);
-      onFocus(win.id);
+
+      const onPointerMove = (e: PointerEvent) => {
+        if (!resizingRef.current) return;
+        const dx = (e.clientX - startRef.current.mx) / scale;
+        const dy = (e.clientY - startRef.current.my) / scale;
+        const minW = 320;
+        const minH = 200;
+        let nextW = startRef.current.edge === 'left'
+          ? startRef.current.w - dx
+          : startRef.current.w + dx;
+        nextW = Math.max(minW, nextW);
+        const nextH = Math.max(minH, startRef.current.h + dy);
+        if (startRef.current.edge === 'left') {
+          const nextX = startRef.current.x + (startRef.current.w - nextW);
+          onMove(win.id, nextX, startRef.current.y);
+        }
+        onResize(win.id, nextW, nextH);
+      };
+
+      const onPointerUp = (e: PointerEvent) => {
+        resizingRef.current = false;
+        handle.releasePointerCapture(e.pointerId);
+      };
+
+      handle.addEventListener('pointerdown', onPointerDown);
+      handle.addEventListener('pointermove', onPointerMove);
+      handle.addEventListener('pointerup', onPointerUp);
+
+      return () => {
+        handle.removeEventListener('pointerdown', onPointerDown);
+        handle.removeEventListener('pointermove', onPointerMove);
+        handle.removeEventListener('pointerup', onPointerUp);
+      };
     };
 
-    const onPointerMove = (e: PointerEvent) => {
-      if (!resizingRef.current) return;
-      const dx = (e.clientX - startRef.current.mx) / scale;
-      const dy = (e.clientY - startRef.current.my) / scale;
-      const nextW = Math.max(320, startRef.current.w + dx);
-      const nextH = Math.max(200, startRef.current.h + dy);
-      onResize(win.id, nextW, nextH);
-    };
-
-    const onPointerUp = (e: PointerEvent) => {
-      resizingRef.current = false;
-      handle.releasePointerCapture(e.pointerId);
-    };
-
-    handle.addEventListener('pointerdown', onPointerDown);
-    handle.addEventListener('pointermove', onPointerMove);
-    handle.addEventListener('pointerup', onPointerUp);
+    const cleanupRight = rightHandle ? attach(rightHandle, 'right') : undefined;
+    const cleanupLeft = leftHandle ? attach(leftHandle, 'left') : undefined;
 
     return () => {
-      handle.removeEventListener('pointerdown', onPointerDown);
-      handle.removeEventListener('pointermove', onPointerMove);
-      handle.removeEventListener('pointerup', onPointerUp);
+      cleanupRight?.();
+      cleanupLeft?.();
     };
-  }, [scale, win.id, win.x, win.y, win.width, win.height, onResize, onFocus]);
+  }, [scale, win.id, win.x, win.y, win.width, win.height, onResize, onMove, onFocus]);
 
   return (
     <div
@@ -257,6 +278,7 @@ export function FileWindow({ win, scale, active, onMove, onResize, onFocus, onCl
           <video className="file-media" src={dataUrl} controls />
         )}
       </div>
+      <div className="terminal-resize left" id={`resize-left-${win.id}`} />
       <div className="terminal-resize" id={`resize-${win.id}`} />
     </div>
   );

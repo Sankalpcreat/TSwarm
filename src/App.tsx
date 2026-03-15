@@ -66,6 +66,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [savedProjects, setSavedProjects] = useState<Array<{ path: string; name: string; lastUsed: number }>>([]);
+  const [showProjectPicker, setShowProjectPicker] = useState(true);
+  const [pickerPath, setPickerPath] = useState('');
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
@@ -127,6 +131,30 @@ export default function App() {
 
   useEffect(() => {
     rootPathRef.current = rootPath;
+  }, [rootPath]);
+
+  useEffect(() => {
+    const loadProjects = async () => {
+      const list = await invoke<Array<{ path: string; name: string; last_used: number }>>('list_saved_projects');
+      const mapped = list.map((item) => ({
+        path: item.path,
+        name: item.name,
+        lastUsed: item.last_used || 0,
+      }));
+      setSavedProjects(mapped);
+      if (!rootPath && mapped.length > 0) {
+        setShowProjectPicker(true);
+      }
+    };
+    loadProjects().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (rootPath) {
+      setShowProjectPicker(false);
+      setPickerPath(rootPath);
+      setPickerError(null);
+    }
   }, [rootPath]);
 
   useEffect(() => {
@@ -359,6 +387,7 @@ export default function App() {
     return {
       version: 1,
       projectPath: rootPath,
+      lastUsed: Date.now(),
       transform,
       activeId,
       windows: windows.map((win) => {
@@ -735,6 +764,8 @@ export default function App() {
   return (
     <div className={`app ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>
       <FileTree
+        rootPath={rootPath}
+        onRootPathChange={setRootPath}
         onRootChange={setRootPath}
         onOpenPath={openFileWindow}
         sessions={windows
@@ -745,6 +776,71 @@ export default function App() {
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
       />
+
+      {showProjectPicker && (
+        <div className="project-picker">
+          <div className="project-card">
+            <div className="project-title">Open Project</div>
+            <div className="project-subtitle">Pick a saved folder or open a new one.</div>
+            {savedProjects.length > 0 && (
+              <div className="project-list">
+                {savedProjects.map((project) => (
+                  <button
+                    key={project.path}
+                    className="project-item"
+                    type="button"
+                    onClick={() => {
+                      setRootPath(project.path);
+                      setPickerError(null);
+                    }}
+                  >
+                    <span className="project-name">{project.name}</span>
+                    <span className="project-path">{project.path}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="project-input-row">
+              <input
+                className="project-input"
+                placeholder="/path/to/project"
+                value={pickerPath}
+                onChange={(event) => setPickerPath(event.target.value)}
+              />
+              <button
+                className="btn"
+                type="button"
+                onClick={async () => {
+                  if (!pickerPath) return;
+                  try {
+                    await invoke('list_dir', { path: pickerPath });
+                    setRootPath(pickerPath);
+                    setPickerError(null);
+                  } catch {
+                    setPickerError('Folder not found');
+                  }
+                }}
+              >
+                Open
+              </button>
+            </div>
+            {pickerError && <div className="project-error">{pickerError}</div>}
+            <div className="project-actions">
+              <button
+                className="btn"
+                type="button"
+                onClick={async () => {
+                  const home = await invoke<string>('default_root');
+                  setRootPath(home);
+                  setPickerError(null);
+                }}
+              >
+                Use Home Folder
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="topbar" data-tauri-drag-region>
         <div className="topbar-left">
