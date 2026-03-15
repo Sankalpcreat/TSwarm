@@ -196,20 +196,30 @@ export default function App() {
       return;
     }
     event.preventDefault();
-    const rect = canvasRef.current.getBoundingClientRect();
-    const mx = event.clientX - rect.left;
-    const my = event.clientY - rect.top;
-    const factor = event.deltaY > 0 ? 0.9 : 1.1;
+    const isPinch = event.ctrlKey || event.metaKey;
+    if (isPinch) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const mx = event.clientX - rect.left;
+      const my = event.clientY - rect.top;
+      const factor = Math.exp(-event.deltaY * 0.002);
 
-    setTransform((prev) => {
-      const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev.scale * factor));
-      const ratio = nextScale / prev.scale;
-      return {
-        scale: nextScale,
-        x: mx - (mx - prev.x) * ratio,
-        y: my - (my - prev.y) * ratio,
-      };
-    });
+      setTransform((prev) => {
+        const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, prev.scale * factor));
+        const ratio = nextScale / prev.scale;
+        return {
+          scale: nextScale,
+          x: mx - (mx - prev.x) * ratio,
+          y: my - (my - prev.y) * ratio,
+        };
+      });
+      return;
+    }
+
+    setTransform((prev) => ({
+      ...prev,
+      x: prev.x - event.deltaX,
+      y: prev.y - event.deltaY,
+    }));
   };
 
   const screenToWorld = (clientX: number, clientY: number) => {
