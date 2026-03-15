@@ -10,6 +10,7 @@ export type VoiceControllerOptions = {
   focusTerminal: (id: string) => void;
   renameTerminal: (id: string, name: string) => void;
   closeTerminal: (id: string) => void;
+  isSpeakerEnabled?: () => boolean;
   log: (msg: string) => void;
 };
 
@@ -221,9 +222,11 @@ export function createVoiceController(opts: VoiceControllerOptions) {
     },
   ];
 
+  const getTerminals = () => opts.getWindows().filter((w) => w.type === 'terminal');
+
   async function handleToolCall(toolCall: any) {
     const responses = [] as any[];
-    const windows = opts.getWindows();
+    const windows = getTerminals();
 
     for (const call of toolCall.functionCalls || []) {
       const args = normalizeArgs(call.args ?? call.arguments ?? call.parameters);
@@ -346,6 +349,7 @@ export function createVoiceController(opts: VoiceControllerOptions) {
 
   function playPcmBase64(data: string) {
     if (!data) return;
+    if (opts.isSpeakerEnabled && !opts.isSpeakerEnabled()) return;
     ensurePlaybackContext();
     if (!playbackContext) return;
     const int16 = decodeBase64ToInt16(data);

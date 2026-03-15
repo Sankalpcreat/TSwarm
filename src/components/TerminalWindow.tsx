@@ -9,7 +9,7 @@ import { initTerminalEvents, registerTerminal, setTerminalPaused, unregisterTerm
 const SCROLLBACK = 1500;
 
 type Props = {
-  win: WindowItem;
+  win: WindowItem & { type: 'terminal'; sessionId: string };
   scale: number;
   active: boolean;
   onMove: (id: string, x: number, y: number) => void;
@@ -17,15 +17,17 @@ type Props = {
   onFocus: (id: string) => void;
   onClose: (id: string) => void;
   onRename: (id: string, name: string) => void;
+  onCommand?: (id: string, command: string) => void;
 };
 
-export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, onClose, onRename }: Props) {
+export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, onClose, onRename, onCommand }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const resizingRef = useRef(false);
   const draggingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0, w: 0, h: 0, mx: 0, my: 0 });
+  const inputBufferRef = useRef('');
 
   useEffect(() => {
     let isMounted = true;
@@ -74,6 +76,20 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
         invoke('write_session', { id: win.sessionId, data }).catch((err) => {
           console.error('write_session failed', err);
         });
+
+        for (const ch of data) {
+          if (ch === '\r' || ch === '\n') {
+            const cmd = inputBufferRef.current.trim();
+            if (cmd) {
+              onCommand?.(win.id, cmd);
+            }
+            inputBufferRef.current = '';
+          } else if (ch === '\u007f') {
+            inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+          } else if (ch >= ' ') {
+            inputBufferRef.current += ch;
+          }
+        }
       });
 
       ro = new ResizeObserver(() => {

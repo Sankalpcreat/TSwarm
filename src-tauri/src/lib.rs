@@ -1,9 +1,12 @@
+use base64::Engine;
+use blake3;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -109,6 +112,408 @@ fn list_dir(path: String) -> Result<Vec<FileEntry>, String> {
     Ok(entries)
 }
 
+fn canvas_state_path(project_path: &str) -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let dir = PathBuf::from(home).join(".canvas-terminal").join("state");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(project_path.as_bytes());
+    let key = hasher.finalize().to_hex().to_string();
+    Ok(dir.join(format!("{}.json", key)))
+}
+
+#[tauri::command]
+fn save_canvas_state(project_path: String, state: String) -> Result<(), String> {
+    let path = canvas_state_path(&project_path)?;
+    fs::write(path, state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_canvas_state(project_path: String) -> Result<Option<String>, String> {
+    let path = canvas_state_path(&project_path)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(path)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_codex_latest_session() -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = PathBuf::from(home).join(".codex").join("history.jsonl");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
+    if len == 0 {
+        return Ok(None);
+    }
+    let size = std::cmp::min(len, 65536);
+    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let mut last_line = None;
+    for line in buf.split(|b| *b == b'\n').rev() {
+        if line.is_empty() {
+            continue;
+        }
+        last_line = Some(String::from_utf8_lossy(line).to_string());
+        break;
+    }
+    let Some(line) = last_line else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    let session_id = value
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(session_id)
+}
+
+#[tauri::command]
+fn get_claude_latest_session(project_path: String) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
+    if len == 0 {
+        return Ok(None);
+    }
+    let size = std::cmp::min(len, 1024 * 1024);
+    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let target = project_path.trim_end_matches('/');
+    for line in buf.split(|b| *b == b'\n').rev() {
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_slice(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let proj = value
+            .get("project")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if proj.trim_end_matches('/') == target {
+            let session_id = value
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            return Ok(session_id);
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+fn get_gemini_latest_session(project_path: String) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let base = PathBuf::from(home).join(".gemini").join("tmp");
+    if !base.exists() {
+        return Ok(None);
+    }
+    let target = project_path.trim_end_matches('/');
+    let mut project_dir: Option<PathBuf> = None;
+    for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let marker = path.join(".project_root");
+        if !marker.exists() {
+            continue;
+        }
+        let root = fs::read_to_string(&marker).unwrap_or_default();
+        if root.trim_end_matches('/') == target {
+            project_dir = Some(path);
+            break;
+        }
+    }
+    let Some(dir) = project_dir else {
+        return Ok(None);
+    };
+    let chats = dir.join("chats");
+    if !chats.exists() {
+        return Ok(None);
+    }
+    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(&chats).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        match &newest {
+            Some((_, t)) if *t >= mtime => {}
+            _ => newest = Some((path, mtime)),
+        }
+    }
+    let Some((path, _)) = newest else {
+        return Ok(None);
+    };
+    let data: serde_json::Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let session_id = data
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(session_id)
+}
+
+fn find_latest_codex_db() -> Result<Option<PathBuf>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let base = PathBuf::from(home).join(".codex");
+    if !base.exists() {
+        return Ok(None);
+    }
+    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("state_") || !name.ends_with(".sqlite") {
+            continue;
+        }
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        match &newest {
+            Some((_, t)) if *t >= mtime => {}
+            _ => newest = Some((path, mtime)),
+        }
+    }
+    Ok(newest.map(|n| n.0))
+}
+
+#[derive(Serialize)]
+struct CodexSessionSummary {
+    session_id: String,
+    ts: i64,
+}
+
+#[derive(Serialize)]
+struct CodexThreadSummary {
+    session_id: String,
+    created_at: i64,
+    cwd: String,
+}
+
+#[tauri::command]
+fn get_codex_threads_after(cwd: String, min_ts_ms: i64, limit: Option<usize>) -> Result<Vec<CodexThreadSummary>, String> {
+    let Some(db_path) = find_latest_codex_db()? else {
+        return Ok(vec![]);
+    };
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    let min_ts = min_ts_ms / 1000;
+    let lim = limit.unwrap_or(50) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, cwd, created_at FROM threads \
+             WHERE (?1 = '' OR cwd = ?1) AND created_at >= ?2 \
+             ORDER BY created_at ASC LIMIT ?3",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query(params![cwd.as_str(), min_ts, lim])
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let session_id: String = row.get(0).map_err(|e| e.to_string())?;
+        let cwd_val: String = row.get(1).map_err(|e| e.to_string())?;
+        let created_at: i64 = row.get(2).map_err(|e| e.to_string())?;
+        out.push(CodexThreadSummary { session_id, created_at, cwd: cwd_val });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn get_codex_recent_sessions(limit: Option<usize>) -> Result<Vec<CodexSessionSummary>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = PathBuf::from(home).join(".codex").join("history.jsonl");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
+    if len == 0 {
+        return Ok(vec![]);
+    }
+    let size = std::cmp::min(len, 1024 * 1024);
+    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let mut sessions = Vec::new();
+    for line in buf.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_slice(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let session_id = match value.get("session_id").and_then(|v| v.as_str()) {
+            Some(v) => v.to_string(),
+            None => continue,
+        };
+        let ts = value.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
+        sessions.push(CodexSessionSummary { session_id, ts });
+    }
+    if let Some(lim) = limit {
+        if sessions.len() > lim {
+            sessions = sessions.split_off(sessions.len() - lim);
+        }
+    }
+    Ok(sessions)
+}
+
+#[tauri::command]
+fn get_claude_latest_session_after(project_path: String, min_ts_ms: i64) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
+    if len == 0 {
+        return Ok(None);
+    }
+    let size = std::cmp::min(len, 1024 * 1024);
+    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let target = project_path.trim_end_matches('/');
+    for line in buf.split(|b| *b == b'\n').rev() {
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_slice(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let proj = value.get("project").and_then(|v| v.as_str()).unwrap_or("");
+        if proj.trim_end_matches('/') != target {
+            continue;
+        }
+        let ts = value.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+        let ts_ms = if ts > 1_000_000_000_000 { ts } else { ts * 1000 };
+        if ts_ms < min_ts_ms {
+            continue;
+        }
+        let session_id = value
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        return Ok(session_id);
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+fn get_gemini_latest_session_after(project_path: String, min_ts_ms: i64) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let base = PathBuf::from(home).join(".gemini").join("tmp");
+    if !base.exists() {
+        return Ok(None);
+    }
+    let target = project_path.trim_end_matches('/');
+    let mut project_dir: Option<PathBuf> = None;
+    for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let marker = path.join(".project_root");
+        if !marker.exists() {
+            continue;
+        }
+        let root = fs::read_to_string(&marker).unwrap_or_default();
+        if root.trim_end_matches('/') == target {
+            project_dir = Some(path);
+            break;
+        }
+    }
+    let Some(dir) = project_dir else {
+        return Ok(None);
+    };
+    let chats = dir.join("chats");
+    if !chats.exists() {
+        return Ok(None);
+    }
+    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(&chats).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        let ts_ms = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        if ts_ms < min_ts_ms {
+            continue;
+        }
+        match &newest {
+            Some((_, t)) if *t >= mtime => {}
+            _ => newest = Some((path, mtime)),
+        }
+    }
+    let Some((path, _)) = newest else {
+        return Ok(None);
+    };
+    let data: serde_json::Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let session_id = data
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(session_id)
+}
+
+#[tauri::command]
+fn read_file_text(path: String, max_bytes: Option<u64>) -> Result<String, String> {
+    let meta = fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        return Err("Path is a directory".to_string());
+    }
+    let limit = max_bytes.unwrap_or(2_000_000);
+    if meta.len() > limit {
+        return Err(format!("File too large to preview ({} bytes).", meta.len()));
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tauri::command]
+fn read_file_base64(path: String, max_bytes: Option<u64>) -> Result<String, String> {
+    let meta = fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        return Err("Path is a directory".to_string());
+    }
+    let limit = max_bytes.unwrap_or(25_000_000);
+    if meta.len() > limit {
+        return Err(format!("File too large to preview ({} bytes).", meta.len()));
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 #[tauri::command]
 fn create_session(
     app: AppHandle,
@@ -142,6 +547,14 @@ fn create_session(
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     cmd.env_remove("npm_config_prefix");
     cmd.env_remove("NPM_CONFIG_PREFIX");
+    cmd.env_remove("ANTHROPIC_API_KEY");
+    cmd.env_remove("ANTHROPIC_BASE_URL");
+    cmd.env_remove("ANTHROPIC_MODEL");
+    cmd.env_remove("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+    cmd.env_remove("ANTHROPIC_DEFAULT_SONNET_MODEL");
+    cmd.env_remove("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    cmd.env_remove("CLAUDE_CODE_SUBAGENT_MODEL");
+    cmd.env_remove("KIMI_API_KEY");
 
     if !cfg!(windows) {
         if shell.ends_with("zsh") {
@@ -303,6 +716,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             default_root,
             list_dir,
+            read_file_text,
+            read_file_base64,
+            save_canvas_state,
+            load_canvas_state,
+            get_codex_latest_session,
+            get_codex_recent_sessions,
+            get_codex_threads_after,
+            get_claude_latest_session,
+            get_gemini_latest_session,
+            get_claude_latest_session_after,
+            get_gemini_latest_session_after,
             create_session,
             write_session,
             resize_session,

@@ -4,11 +4,12 @@ export type CanvasTransform = {
   scale: number;
 };
 
-export type WindowType = 'terminal';
+export type WindowType = 'terminal' | 'file';
+
+export type FileKind = 'text' | 'image' | 'pdf' | 'video' | 'unknown';
 
 export type WindowItem = {
   id: string;
-  sessionId: string;
   title: string;
   name: string;
   x: number;
@@ -17,6 +18,12 @@ export type WindowItem = {
   height: number;
   z: number;
   type: WindowType;
+  sessionId?: string;
+  path?: string;
+  fileKind?: FileKind;
+  fileMime?: string;
+  terminalKind?: 'codex' | 'claude' | 'gemini' | 'shell';
+  resumeSessionId?: string;
 };
 
 export type FileEntry = {
