@@ -1,8 +1,6 @@
 # TSwarm
 
 
-[![TSwarm UI](docs/mock.png)](docs/launch.mp4)
-
 A spatial terminal workspace: an infinite 2D canvas with multiple real shell sessions (PTY) you can spawn, drag, resize, and zoom. Use it like a multi‑terminal cockpit for Claude Code, Codex CLI, Gemini CLI, or any CLI tool you already have installed.
 
 ## What You Get
