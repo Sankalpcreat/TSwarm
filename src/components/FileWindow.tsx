@@ -238,10 +238,10 @@ export function FileWindow({ win, scale, active, onMove, onResize, onFocus, onCl
     <div
       className={`terminal-window file-window ${active ? 'active' : ''}`}
       style={{
-        left: `${win.x}px`,
-        top: `${win.y}px`,
-        width: `${win.width}px`,
-        height: `${win.height}px`,
+        left: `${win.x * scale}px`,
+        top: `${win.y * scale}px`,
+        width: `${win.width * scale}px`,
+        height: `${win.height * scale}px`,
         zIndex: win.z,
       }}
       onPointerDown={() => onFocus(win.id)}

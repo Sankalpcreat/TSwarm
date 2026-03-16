@@ -759,9 +759,9 @@ export default function App() {
 
   const canvasStyle = useMemo(() => {
     return {
-      transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+      transform: `translate(${transform.x}px, ${transform.y}px)`,
     } as React.CSSProperties;
-  }, [transform]);
+  }, [transform.x, transform.y]);
 
   return (
     <div className={`app ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>

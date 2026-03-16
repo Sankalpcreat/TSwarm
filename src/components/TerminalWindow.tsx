@@ -24,10 +24,12 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const resizingRef = useRef(false);
   const draggingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0, w: 0, h: 0, mx: 0, my: 0, edge: 'right' as 'left' | 'right' });
   const inputBufferRef = useRef('');
+  const baseFontSize = 13;
 
   useEffect(() => {
     let isMounted = true;
@@ -51,6 +53,7 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
 
       fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
+      fitRef.current = fitAddon;
       term.loadAddon(new WebLinksAddon());
 
       if (containerRef.current) {
@@ -122,6 +125,18 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
       termRef.current?.focus();
     }
   }, [active, win.sessionId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    const fitAddon = fitRef.current;
+    if (!term || !fitAddon) return;
+    const nextSize = Math.max(9, Math.round(baseFontSize * scale));
+    if (term.options.fontSize !== nextSize) {
+      term.options.fontSize = nextSize;
+      fitAddon.fit();
+      invoke('resize_session', { id: win.sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
+    }
+  }, [scale, win.sessionId]);
 
   useEffect(() => {
     const header = headerRef.current;
@@ -236,10 +251,10 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
     <div
       className={`terminal-window ${active ? 'active' : ''}`}
       style={{
-        left: `${win.x}px`,
-        top: `${win.y}px`,
-        width: `${win.width}px`,
-        height: `${win.height}px`,
+        left: `${win.x * scale}px`,
+        top: `${win.y * scale}px`,
+        width: `${win.width * scale}px`,
+        height: `${win.height * scale}px`,
         zIndex: win.z,
       }}
       onPointerDown={() => {
