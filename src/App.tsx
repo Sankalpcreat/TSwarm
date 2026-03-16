@@ -91,10 +91,14 @@ export default function App() {
   );
 
   useEffect(() => {
-    (window as any).__addLog = (m: string) => {
-       invoke('log_frontend', { message: m }).catch(()=>{});
-    };
-    (window as any).__addLog('App mounted');
+    if (import.meta.env.DEV) {
+      (window as any).__addLog = (m: string) => {
+        invoke('log_frontend', { message: m }).catch(() => {});
+      };
+      (window as any).__addLog('App mounted');
+    } else {
+      (window as any).__addLog = () => {};
+    }
     const onPointerMove = (event: PointerEvent) => {
       if (!panRef.current.active) return;
       const dx = event.clientX - panRef.current.startX;

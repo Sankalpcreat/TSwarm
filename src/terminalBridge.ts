@@ -16,6 +16,7 @@ type TerminalRecord = {
 const terminals = new Map<string, TerminalRecord>();
 const pending = new Map<string, string>();
 let listening = false;
+const DEBUG_IPC = import.meta.env.DEV;
 
 const MAX_BUFFER = 200_000; // chars
 const MAX_OUTPUT_LINES = 2000;
@@ -69,7 +70,9 @@ function scheduleFlush(id: string) {
     if (!record.buffer || record.paused) return;
     const data = record.buffer;
     record.buffer = '';
-    (window as any).__addLog?.(`xterm write len=${data.length}`);
+    if (DEBUG_IPC) {
+      (window as any).__addLog?.(`xterm write len=${data.length}`);
+    }
     record.term.write(data);
   });
 }
@@ -79,7 +82,9 @@ export async function initTerminalEvents() {
   listening = true;
   await listen<TerminalDataEvent>('terminal:data', (event) => {
     const { id, data } = event.payload;
-    (window as any).__addLog?.(`IPC_RECV ${id.slice(0,5)} len=${data.length}`);
+    if (DEBUG_IPC) {
+      (window as any).__addLog?.(`IPC_RECV ${id.slice(0,5)} len=${data.length}`);
+    }
     appendOutput(id, data);
     const record = terminals.get(id);
     if (!record) {
@@ -91,7 +96,9 @@ export async function initTerminalEvents() {
     }
 
     record.buffer += data;
-    console.log(`[IPC] Terminal ${id} buffered ${data.length} bytes (total ${record.buffer.length})`);
+    if (DEBUG_IPC) {
+      console.log(`[IPC] Terminal ${id} buffered ${data.length} bytes (total ${record.buffer.length})`);
+    }
     if (record.buffer.length > MAX_BUFFER) {
       record.buffer = record.buffer.slice(-MAX_BUFFER);
     }

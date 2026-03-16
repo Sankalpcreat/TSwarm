@@ -129,6 +129,13 @@ fn canvas_state_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn claude_project_dir(project_path: &str) -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let trimmed = project_path.trim_end_matches('/');
+    let encoded = trimmed.replace('/', "-");
+    Ok(PathBuf::from(home).join(".claude").join("projects").join(encoded))
+}
+
 #[tauri::command]
 fn save_canvas_state(project_path: String, state: String) -> Result<(), String> {
     let path = canvas_state_path(&project_path)?;
@@ -240,42 +247,38 @@ fn get_codex_latest_session() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn get_claude_latest_session(project_path: String) -> Result<Option<String>, String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
-    if !path.exists() {
+    let dir = claude_project_dir(&project_path)?;
+    if !dir.exists() {
         return Ok(None);
     }
-    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
-    if len == 0 {
-        return Ok(None);
-    }
-    let size = std::cmp::min(len, 1024 * 1024);
-    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let target = project_path.trim_end_matches('/');
-    for line in buf.split(|b| *b == b'\n').rev() {
-        if line.is_empty() {
+    let mut newest: Option<(String, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
             continue;
         }
-        let value: serde_json::Value = match serde_json::from_slice(line) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
         };
-        let proj = value
-            .get("project")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if proj.trim_end_matches('/') == target {
-            let session_id = value
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            return Ok(session_id);
+        match &newest {
+            Some((_, t)) if *t >= mtime => {}
+            _ => newest = Some((name, mtime)),
         }
     }
-    Ok(None)
+    Ok(newest.map(|n| n.0))
+}
+
+#[tauri::command]
+fn claude_session_exists(project_path: String, session_id: String) -> Result<bool, String> {
+    let dir = claude_project_dir(&project_path)?;
+    if !dir.exists() {
+        return Ok(false);
+    }
+    let filename = format!("{}.jsonl", session_id.trim());
+    Ok(dir.join(filename).exists())
 }
 
 #[tauri::command]
@@ -445,45 +448,35 @@ fn get_codex_recent_sessions(limit: Option<usize>) -> Result<Vec<CodexSessionSum
 
 #[tauri::command]
 fn get_claude_latest_session_after(project_path: String, min_ts_ms: i64) -> Result<Option<String>, String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
-    if !path.exists() {
+    let dir = claude_project_dir(&project_path)?;
+    if !dir.exists() {
         return Ok(None);
     }
-    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let len = file.metadata().map_err(|e| e.to_string())?.len() as i64;
-    if len == 0 {
-        return Ok(None);
-    }
-    let size = std::cmp::min(len, 1024 * 1024);
-    file.seek(SeekFrom::End(-size)).map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let target = project_path.trim_end_matches('/');
-    for line in buf.split(|b| *b == b'\n').rev() {
-        if line.is_empty() {
+    let mut newest: Option<(String, std::time::SystemTime)> = None;
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
             continue;
         }
-        let value: serde_json::Value = match serde_json::from_slice(line) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        let mtime_ms = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as i64;
+        if mtime_ms < min_ts_ms {
+            continue;
+        }
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
         };
-        let proj = value.get("project").and_then(|v| v.as_str()).unwrap_or("");
-        if proj.trim_end_matches('/') != target {
-            continue;
+        match &newest {
+            Some((_, t)) if *t >= mtime => {}
+            _ => newest = Some((name, mtime)),
         }
-        let ts = value.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        let ts_ms = if ts > 1_000_000_000_000 { ts } else { ts * 1000 };
-        if ts_ms < min_ts_ms {
-            continue;
-        }
-        let session_id = value
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        return Ok(session_id);
     }
-    Ok(None)
+    Ok(newest.map(|n| n.0))
 }
 
 #[tauri::command]
