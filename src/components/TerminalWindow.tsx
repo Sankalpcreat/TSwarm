@@ -116,7 +116,8 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
   }, [win.sessionId]);
 
   useEffect(() => {
-    setTerminalPaused(win.sessionId, !active);
+    // Keep output streaming even when the terminal is not focused.
+    setTerminalPaused(win.sessionId, false);
     if (active) {
       termRef.current?.focus();
     }
