@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { invoke } from '@tauri-apps/api/core';
 import type { WindowItem } from '../types';
-import { initTerminalEvents, registerTerminal, setTerminalPaused, unregisterTerminal } from '../terminalBridge';
+import { initTerminalEvents, registerTerminal, setTerminalActive, setTerminalPaused, unregisterTerminal } from '../terminalBridge';
 
 const SCROLLBACK = 1500;
 
@@ -66,6 +66,7 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
         registerTerminal(win.sessionId, term);
         invoke('log_frontend', { message: `registered ${win.sessionId} cols=${term.cols} rows=${term.rows}` }).catch(()=>{});
         setTerminalPaused(win.sessionId, false);
+        setTerminalActive(win.sessionId, active);
         invoke('resize_session', { id: win.sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
       }
       setTimeout(() => {
@@ -116,9 +117,13 @@ export function TerminalWindow({ win, scale, active, onMove, onResize, onFocus, 
   }, [win.sessionId]);
 
   useEffect(() => {
-    setTerminalPaused(win.sessionId, !active);
+    setTerminalActive(win.sessionId, active);
+    const termAny = termRef.current as any;
     if (active) {
+      termAny?.resumeRenderer?.();
       termRef.current?.focus();
+    } else {
+      termAny?.pauseRenderer?.();
     }
   }, [active, win.sessionId]);
 

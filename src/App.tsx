@@ -1,18 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { isRegistered, register, unregister } from '@tauri-apps/plugin-global-shortcut';
 import { FileTree } from './components/FileTree';
 import { FileWindow } from './components/FileWindow';
 import { TerminalWindow } from './components/TerminalWindow';
 import type { CanvasTransform, FileKind, WindowItem } from './types';
-import { createVoiceController } from './voice';
 import { getTerminalOutput } from './terminalBridge';
 import './App.css';
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 2.5;
-const DEFAULT_SHORTCUT = 'Fn';
 
 const TEXT_EXTS = new Set([
   'txt', 'md', 'markdown', 'json', 'js', 'ts', 'tsx', 'jsx', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h',
@@ -57,13 +53,7 @@ export default function App() {
   const [windows, setWindows] = useState<WindowItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string>('');
-  const [voiceActive, setVoiceActive] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [shortcut, setShortcut] = useState<string>(DEFAULT_SHORTCUT);
-  const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [speakerEnabled, setSpeakerEnabled] = useState(true);
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [savedProjects, setSavedProjects] = useState<Array<{ path: string; name: string; lastUsed: number }>>([]);
   const [showProjectPicker, setShowProjectPicker] = useState(true);
   const [pickerPath, setPickerPath] = useState('');
@@ -76,18 +66,12 @@ export default function App() {
   const windowsRef = useRef<WindowItem[]>([]);
   const activeIdRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>('');
-  const voiceRef = useRef<ReturnType<typeof createVoiceController> | null>(null);
-  const toggleVoiceRef = useRef<() => void>(() => {});
-  const lastGlobalShortcutRef = useRef<string | null>(null);
-  const speakerRef = useRef(true);
-  const voiceEnabledRef = useRef(true);
   const saveTimerRef = useRef<number | null>(null);
   const restoringRef = useRef(false);
   const codexAssignedRef = useRef(new Set<string>());
-  const codexStatusRequestedRef = useRef(new Set<string>());
-  const claudeStatusRequestedRef = useRef(new Set<string>());
+  const claudeAssignedRef = useRef(new Set<string>());
   const pendingResumeRef = useRef(
-    new Map<string, { kind: 'codex' | 'claude' | 'gemini'; startedAt: number; baseline: Set<string> }>()
+    new Map<string, { kind: 'claude' | 'gemini'; startedAt: number; baseline: Set<string> }>()
   );
 
   useEffect(() => {
@@ -158,22 +142,6 @@ export default function App() {
       setPickerError(null);
     }
   }, [rootPath]);
-
-  useEffect(() => {
-    speakerRef.current = speakerEnabled;
-  }, [speakerEnabled]);
-
-  useEffect(() => {
-    voiceEnabledRef.current = voiceEnabled;
-  }, [voiceEnabled]);
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem('voiceShortcut');
-    if (stored && stored.trim()) {
-      const trimmed = stored.trim();
-      setShortcut(trimmed);
-    }
-  }, []);
 
   const isBackgroundTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return true;
@@ -385,13 +353,16 @@ export default function App() {
     if (!trimmed) return;
     if (trimmed === 'codex' || trimmed.startsWith('codex ')) {
       updateWindow(winId, { terminalKind: 'codex' });
-      pendingResumeRef.current.set(winId, { kind: 'codex', startedAt: Date.now(), baseline: new Set() });
     } else if (trimmed === 'claude' || trimmed.startsWith('claude ')) {
       updateWindow(winId, { terminalKind: 'claude' });
       pendingResumeRef.current.set(winId, { kind: 'claude', startedAt: Date.now(), baseline: new Set() });
     } else if (trimmed === 'gemini' || trimmed.startsWith('gemini ')) {
       updateWindow(winId, { terminalKind: 'gemini' });
       pendingResumeRef.current.set(winId, { kind: 'gemini', startedAt: Date.now(), baseline: new Set() });
+    } else if (trimmed.startsWith('/resume') || trimmed.startsWith('/fork') || trimmed.startsWith('/new')) {
+      const win = windowsRef.current.find((w) => w.id === winId) as WindowItem | undefined;
+      if (win?.terminalKind === 'codex') {
+      }
     }
   };
 
@@ -502,6 +473,12 @@ export default function App() {
               .map((w) => w.resumeSessionId as string)
           );
           codexAssignedRef.current = assigned;
+          const claudeAssigned = new Set(
+            restored
+              .filter((w) => w.type === 'terminal' && w.terminalKind === 'claude' && w.resumeSessionId)
+              .map((w) => w.resumeSessionId as string)
+          );
+          claudeAssignedRef.current = claudeAssigned;
         }
       } catch (err) {
         console.warn('load state failed', err);
@@ -518,7 +495,7 @@ export default function App() {
   useEffect(() => {
     const timer = window.setInterval(async () => {
       const candidates = windowsRef.current.filter(
-        (w) => w.type === 'terminal' && (!w.terminalKind || !w.resumeSessionId)
+        (w) => w.type === 'terminal' && !w.terminalKind
       ) as (WindowItem & { type: 'terminal'; sessionId: string })[];
       if (candidates.length === 0) return;
       for (const win of candidates) {
@@ -542,71 +519,92 @@ export default function App() {
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
+      const codexWindows = windowsRef.current.filter(
+        (w) => w.type === 'terminal' && w.terminalKind === 'codex'
+      ) as (WindowItem & { type: 'terminal'; sessionId: string })[];
+      if (codexWindows.length === 0) return;
+      const sessions = await invoke<Array<{ session_id: string; updated_at: number; cwd: string }>>(
+        'get_codex_threads_after',
+        { cwd: rootPathRef.current || '', minTsMs: 0, limit: 50 }
+      ).catch(() => []);
+      if (sessions.length === 0) return;
+      const sessionIds = new Set(sessions.map((s) => s.session_id));
+      const activeId = activeIdRef.current;
+      const orderedWins = [...codexWindows].sort((a, b) => {
+        if (a.id === activeId) return -1;
+        if (b.id === activeId) return 1;
+        return a.id.localeCompare(b.id);
+      });
+      const assigned = new Set<string>();
+      const nextAvailable = () => sessions.find((s) => !assigned.has(s.session_id));
+      for (const win of orderedWins) {
+        const currentId = win.resumeSessionId;
+        if (currentId && sessionIds.has(currentId) && !assigned.has(currentId)) {
+          assigned.add(currentId);
+          continue;
+        }
+        const next = nextAvailable();
+        if (!next) continue;
+        const prevId = win.resumeSessionId;
+        if (prevId && prevId !== next.session_id) {
+          codexAssignedRef.current.delete(prevId);
+        }
+        assigned.add(next.session_id);
+        codexAssignedRef.current.add(next.session_id);
+        updateWindow(win.id, { resumeSessionId: next.session_id });
+      }
+      codexAssignedRef.current = assigned;
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      const claudeWindows = windowsRef.current.filter(
+        (w) => w.type === 'terminal' && w.terminalKind === 'claude'
+      ) as (WindowItem & { type: 'terminal'; sessionId: string })[];
+      if (claudeWindows.length === 0) return;
+      const sessions = await invoke<Array<{ session_id: string; updated_at: number }>>(
+        'get_claude_sessions',
+        { projectPath: rootPathRef.current || '', limit: 50 }
+      ).catch(() => []);
+      if (sessions.length === 0) return;
+      const sessionIds = new Set(sessions.map((s) => s.session_id));
+      const activeId = activeIdRef.current;
+      const orderedWins = [...claudeWindows].sort((a, b) => {
+        if (a.id === activeId) return -1;
+        if (b.id === activeId) return 1;
+        return a.id.localeCompare(b.id);
+      });
+      const assigned = new Set<string>();
+      const nextAvailable = () => sessions.find((s) => !assigned.has(s.session_id));
+      for (const win of orderedWins) {
+        const currentId = win.resumeSessionId;
+        if (currentId && sessionIds.has(currentId) && !assigned.has(currentId)) {
+          assigned.add(currentId);
+          continue;
+        }
+        const next = nextAvailable();
+        if (!next) continue;
+        const prevId = win.resumeSessionId;
+        if (prevId && prevId !== next.session_id) {
+          claudeAssignedRef.current.delete(prevId);
+        }
+        assigned.add(next.session_id);
+        claudeAssignedRef.current.add(next.session_id);
+        updateWindow(win.id, { resumeSessionId: next.session_id });
+      }
+      claudeAssignedRef.current = assigned;
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
       if (pendingResumeRef.current.size === 0) return;
       for (const [winId, pending] of Array.from(pendingResumeRef.current.entries())) {
-        if (pending.kind === 'codex') {
-          const win = windowsRef.current.find((w) => w.id === winId) as
-            | (WindowItem & { type: 'terminal'; sessionId: string })
-            | undefined;
-          if (win?.sessionId) {
-            const output = getTerminalOutput(win.sessionId, 200).text;
-            const match =
-              output.match(/Session\\s*ID\\s*[:=]\\s*([a-f0-9-]{8,})/i) ||
-              output.match(/session_id\\s*[:=]\\s*([a-f0-9-]{8,})/i);
-            if (match) {
-              updateWindow(winId, { resumeSessionId: match[1] });
-              pendingResumeRef.current.delete(winId);
-              codexStatusRequestedRef.current.delete(winId);
-              continue;
-            }
-            const codexReady =
-              /OpenAI Codex|gpt-.*codex|Tip:|model:/i.test(output) || output.includes('Use /fork');
-            if (!codexStatusRequestedRef.current.has(winId) && codexReady) {
-              codexStatusRequestedRef.current.add(winId);
-              invoke('write_session', { id: win.sessionId, data: '/status\r' }).catch(() => {});
-            }
-          }
-          const sessions = await invoke<Array<{ session_id: string; created_at: number; cwd: string }>>(
-            'get_codex_threads_after',
-            { cwd: rootPathRef.current || '', minTsMs: pending.startedAt, limit: 50 }
-          ).catch(() => []);
-          const candidate = sessions.find((s) => !codexAssignedRef.current.has(s.session_id));
-          if (candidate) {
-            codexAssignedRef.current.add(candidate.session_id);
-            updateWindow(winId, { resumeSessionId: candidate.session_id });
-            pendingResumeRef.current.delete(winId);
-            codexStatusRequestedRef.current.delete(winId);
-          }
-        } else if (pending.kind === 'claude') {
-          const win = windowsRef.current.find((w) => w.id === winId) as
-            | (WindowItem & { type: 'terminal'; sessionId: string })
-            | undefined;
-          if (win?.sessionId) {
-            const output = getTerminalOutput(win.sessionId, 200).text;
-            const match =
-              output.match(/Session\\s*ID\\s*[:=]\\s*([a-f0-9-]{8,})/i) ||
-              output.match(/session_id\\s*[:=]\\s*([a-f0-9-]{8,})/i);
-            if (match) {
-              updateWindow(winId, { resumeSessionId: match[1] });
-              pendingResumeRef.current.delete(winId);
-              claudeStatusRequestedRef.current.delete(winId);
-              continue;
-            }
-            const claudeReady = /Claude Code|claude/i.test(output);
-            if (!claudeStatusRequestedRef.current.has(winId) && claudeReady) {
-              claudeStatusRequestedRef.current.add(winId);
-              invoke('write_session', { id: win.sessionId, data: '/status\r' }).catch(() => {});
-            }
-          }
-          const latest = await invoke<string | null>('get_claude_latest_session_after', {
-            projectPath: rootPathRef.current || '',
-            minTsMs: pending.startedAt,
-          }).catch(() => null);
-          if (latest) {
-            updateWindow(winId, { resumeSessionId: latest });
-            pendingResumeRef.current.delete(winId);
-            claudeStatusRequestedRef.current.delete(winId);
-          }
+        if (pending.kind === 'claude') {
+          pendingResumeRef.current.delete(winId);
         } else if (pending.kind === 'gemini') {
           const latest = await invoke<string | null>('get_gemini_latest_session_after', {
             projectPath: rootPathRef.current || '',
@@ -618,147 +616,8 @@ export default function App() {
           }
         }
       }
-    }, 1500);
+    }, 10000);
     return () => window.clearInterval(timer);
-  }, []);
-
-  const toggleVoice = async () => {
-    if (!voiceEnabledRef.current) {
-      setVoiceError('Voice is disabled');
-      return;
-    }
-    if (!voiceRef.current) {
-      voiceRef.current = createVoiceController({
-        getWindows: () => windowsRef.current,
-        getActiveId: () => activeIdRef.current,
-        spawnTerminal: (x, y, name) => spawnTerminal(x, y, name),
-        focusTerminal: handleFocus,
-        renameTerminal: handleRename,
-        closeTerminal: handleClose,
-        isSpeakerEnabled: () => speakerRef.current,
-        log: (msg) => invoke('log_frontend', { message: msg }).catch(() => {}),
-      });
-    }
-
-    if (voiceActive) {
-      await voiceRef.current.stop();
-      setVoiceActive(false);
-      return;
-    }
-
-    try {
-      setVoiceError(null);
-      await voiceRef.current.start();
-      setVoiceActive(true);
-    } catch (err: any) {
-      setVoiceError(err?.message || 'Voice start failed');
-      setVoiceActive(false);
-    }
-  };
-
-  const hardStopVoice = async () => {
-    try {
-      await voiceRef.current?.stop();
-    } catch {
-      // ignore
-    } finally {
-      voiceRef.current = null;
-      setVoiceActive(false);
-    }
-  };
-
-  useEffect(() => {
-    toggleVoiceRef.current = () => {
-      if (!voiceEnabledRef.current) return;
-      toggleVoice().catch((err) => {
-        console.error('toggleVoice failed', err);
-      });
-    };
-  }, [toggleVoice]);
-
-  useEffect(() => {
-    if (voiceEnabled) return;
-    hardStopVoice();
-  }, [voiceEnabled, voiceActive]);
-
-  const normalizeShortcut = (value: string) => value.toLowerCase().replace(/\s+/g, '');
-  const getFnMode = (value: string) => {
-    const normalized = normalizeShortcut(value);
-    if (normalized === 'fn') return 'fn';
-    if (normalized === 'fn+space' || normalized === 'fnspace') return 'fn_space';
-    return null;
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    const setupShortcut = async () => {
-      if (!shortcut) return;
-      if (!voiceEnabled) {
-        if (lastGlobalShortcutRef.current) {
-          await unregister(lastGlobalShortcutRef.current).catch(() => {});
-          lastGlobalShortcutRef.current = null;
-        }
-        await invoke('set_fn_hotkey_mode', { mode: 'off' });
-        return;
-      }
-      try {
-        setShortcutError(null);
-        const fnMode = getFnMode(shortcut);
-        if (fnMode) {
-          if (lastGlobalShortcutRef.current) {
-            await unregister(lastGlobalShortcutRef.current).catch(() => {});
-            lastGlobalShortcutRef.current = null;
-          }
-          await invoke('set_fn_hotkey_mode', { mode: fnMode });
-          return;
-        }
-        await invoke('set_fn_hotkey_mode', { mode: 'off' });
-        if (await isRegistered(shortcut)) {
-          await unregister(shortcut);
-        }
-        await register(shortcut, () => toggleVoiceRef.current());
-        lastGlobalShortcutRef.current = shortcut;
-      } catch (err: any) {
-        if (!cancelled) {
-          setShortcutError(err?.message || 'Failed to register shortcut. Try F19 or CommandOrControl+Alt+Shift+K.');
-        }
-      }
-    };
-    setupShortcut();
-
-    return () => {
-      cancelled = true;
-      if (shortcut) unregister(shortcut).catch(() => {});
-    };
-  }, [shortcut, voiceEnabled]);
-
-  const promptShortcut = () => {
-    const next = window.prompt('Set shortcut (e.g. Fn, Fn+Space, CommandOrControl+Shift+K)', shortcut);
-    if (!next) return;
-    const trimmed = next.trim();
-    if (!trimmed) return;
-    window.localStorage.setItem('voiceShortcut', trimmed);
-    setShortcut(trimmed);
-  };
-
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let unlistenErr: (() => void) | null = null;
-    const setup = async () => {
-      unlisten = await listen('fn-hotkey', () => {
-        if (!voiceEnabledRef.current) return;
-        toggleVoiceRef.current();
-      });
-      unlistenErr = await listen('fn-hotkey-error', (event) => {
-        const msg = typeof event.payload === 'string' ? event.payload : 'Fn hotkey error';
-        setShortcutError(msg);
-      });
-    };
-    setup();
-    return () => {
-      unlisten?.();
-      unlistenErr?.();
-    };
   }, []);
 
   const canvasStyle = useMemo(() => {
@@ -857,78 +716,7 @@ export default function App() {
             + Terminal
           </button>
         </div>
-        <div className="topbar-right">
-          <div
-            className={`fn-indicator has-tooltip ${shortcut.toLowerCase().includes('fn') ? 'active' : ''}`}
-            data-tooltip="Active shortcut"
-          >
-            {shortcut}
-            <span className="fn-check">✓</span>
-          </div>
-          <button
-            className={`icon-btn kill-btn has-tooltip ${voiceEnabled ? '' : 'active'}`}
-            onClick={() => {
-              setVoiceEnabled((prev) => {
-                const next = !prev;
-                if (!next) {
-                  setShortcutError(null);
-                }
-                return next;
-              });
-            }}
-            data-tooltip={voiceEnabled ? 'Disable voice + hotkeys' : 'Enable voice + hotkeys'}
-            data-tauri-drag-region="false"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 7l12 10" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M8 5h8l2 2v10l-2 2H8l-2-2V7z" stroke="currentColor" strokeWidth="1.4" fill="none" />
-            </svg>
-          </button>
-          <button
-            className={`icon-btn speaker-btn has-tooltip ${speakerEnabled ? 'active' : ''}`}
-            onClick={() => setSpeakerEnabled((prev) => !prev)}
-            data-tooltip={speakerEnabled ? 'Mute speaker' : 'Unmute speaker'}
-            data-tauri-drag-region="false"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 10h4l5-4v12l-5-4H4z" fill="currentColor" />
-              <path d="M16 9a3 3 0 0 1 0 6" stroke="currentColor" strokeWidth="1.6" fill="none" />
-            </svg>
-          </button>
-          <button
-            className={`icon-btn mic-btn has-tooltip ${voiceActive ? 'active' : ''}`}
-            onClick={toggleVoice}
-            data-tooltip={voiceActive ? 'Stop voice control' : 'Start voice control'}
-            data-tauri-drag-region="false"
-            disabled={!voiceEnabled}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3z"
-                fill="currentColor"
-              />
-              <path
-                d="M6 11a6 6 0 0 0 12 0h-2a4 4 0 1 1-8 0H6zM11 17h2v3h-2z"
-                fill="currentColor"
-              />
-            </svg>
-          </button>
-          <button
-            className="icon-btn has-tooltip"
-            onClick={promptShortcut}
-            data-tooltip="Set shortcut"
-            data-tauri-drag-region="false"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 5a2 2 0 0 0-2 2v2H8a2 2 0 0 0-2 2v2h2v-2h2v2a2 2 0 0 0 2 2h2v2a2 2 0 0 0 2 2h2v-2h-2v-2h2a2 2 0 0 0 2-2V9h-2v2h-2V9a2 2 0 0 0-2-2h-2V5h-2z"
-                fill="currentColor"
-              />
-            </svg>
-          </button>
-          {voiceError && <div className="voice-error">{voiceError}</div>}
-          {shortcutError && <div className="voice-error">{shortcutError}</div>}
-        </div>
+        <div className="topbar-right" />
       </div>
 
       <div className="zoom-float">

@@ -11,6 +11,10 @@ type TerminalRecord = {
   buffer: string;
   raf: number | null;
   paused: boolean;
+  active: boolean;
+  lastOutputAt: number;
+  burstUntil: number;
+  nextFlushAt: number;
 };
 
 const terminals = new Map<string, TerminalRecord>();
@@ -20,6 +24,8 @@ const DEBUG_IPC = import.meta.env.DEV;
 
 const MAX_BUFFER = 200_000; // chars
 const MAX_OUTPUT_LINES = 2000;
+const BACKGROUND_FLUSH_MS = 200;
+const BACKGROUND_BURST_MS = 1500;
 
 type OutputBuffer = {
   lines: string[];
@@ -64,10 +70,17 @@ function appendOutput(id: string, data: string) {
 function scheduleFlush(id: string) {
   const record = terminals.get(id);
   if (!record || record.raf !== null || record.paused) return;
+  const now = Date.now();
+  if (!record.active) {
+    if (now > record.burstUntil) return;
+    if (now < record.nextFlushAt) return;
+    record.nextFlushAt = now + BACKGROUND_FLUSH_MS;
+  }
 
   record.raf = requestAnimationFrame(() => {
     record.raf = null;
     if (!record.buffer || record.paused) return;
+    if (!record.active && Date.now() > record.burstUntil) return;
     const data = record.buffer;
     record.buffer = '';
     if (DEBUG_IPC) {
@@ -96,6 +109,8 @@ export async function initTerminalEvents() {
     }
 
     record.buffer += data;
+    record.lastOutputAt = Date.now();
+    record.burstUntil = record.lastOutputAt + BACKGROUND_BURST_MS;
     if (DEBUG_IPC) {
       console.log(`[IPC] Terminal ${id} buffered ${data.length} bytes (total ${record.buffer.length})`);
     }
@@ -107,7 +122,17 @@ export async function initTerminalEvents() {
 }
 
 export function registerTerminal(id: string, term: Terminal) {
-  terminals.set(id, { term, buffer: '', raf: null, paused: false });
+  const now = Date.now();
+  terminals.set(id, {
+    term,
+    buffer: '',
+    raf: null,
+    paused: false,
+    active: false,
+    lastOutputAt: now,
+    burstUntil: now,
+    nextFlushAt: 0,
+  });
   const buffered = pending.get(id);
   if (buffered) {
     pending.delete(id);
@@ -130,6 +155,16 @@ export function setTerminalPaused(id: string, paused: boolean) {
   if (!record) return;
   record.paused = paused;
   if (!paused) scheduleFlush(id);
+}
+
+export function setTerminalActive(id: string, active: boolean) {
+  const record = terminals.get(id);
+  if (!record) return;
+  record.active = active;
+  if (active) {
+    record.burstUntil = Date.now() + BACKGROUND_BURST_MS;
+    scheduleFlush(id);
+  }
 }
 
 export function getTerminalOutput(id: string, lines = 50) {

@@ -373,8 +373,14 @@ struct CodexSessionSummary {
 #[derive(Serialize)]
 struct CodexThreadSummary {
     session_id: String,
-    created_at: i64,
+    updated_at: i64,
     cwd: String,
+}
+
+#[derive(Serialize)]
+struct ClaudeSessionSummary {
+    session_id: String,
+    updated_at: i64,
 }
 
 #[tauri::command]
@@ -384,13 +390,13 @@ fn get_codex_threads_after(cwd: String, min_ts_ms: i64, limit: Option<usize>) ->
     };
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
-    let min_ts = min_ts_ms / 1000;
+    let min_ts = if min_ts_ms > 2_000_000_000_000 { min_ts_ms / 1000 } else { min_ts_ms };
     let lim = limit.unwrap_or(50) as i64;
     let mut stmt = conn
         .prepare(
-            "SELECT id, cwd, created_at FROM threads \
-             WHERE (?1 = '' OR cwd = ?1) AND created_at >= ?2 \
-             ORDER BY created_at ASC LIMIT ?3",
+            "SELECT id, cwd, updated_at FROM threads \
+             WHERE (?1 = '' OR cwd = ?1) AND updated_at >= ?2 \
+             ORDER BY updated_at DESC LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
@@ -400,8 +406,9 @@ fn get_codex_threads_after(cwd: String, min_ts_ms: i64, limit: Option<usize>) ->
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         let session_id: String = row.get(0).map_err(|e| e.to_string())?;
         let cwd_val: String = row.get(1).map_err(|e| e.to_string())?;
-        let created_at: i64 = row.get(2).map_err(|e| e.to_string())?;
-        out.push(CodexThreadSummary { session_id, created_at, cwd: cwd_val });
+        let updated_at_sec: i64 = row.get(2).map_err(|e| e.to_string())?;
+        let updated_at = updated_at_sec.saturating_mul(1000);
+        out.push(CodexThreadSummary { session_id, updated_at, cwd: cwd_val });
     }
     Ok(out)
 }
@@ -477,6 +484,37 @@ fn get_claude_latest_session_after(project_path: String, min_ts_ms: i64) -> Resu
         }
     }
     Ok(newest.map(|n| n.0))
+}
+
+#[tauri::command]
+fn get_claude_sessions(project_path: String, limit: Option<usize>) -> Result<Vec<ClaudeSessionSummary>, String> {
+    let dir = claude_project_dir(&project_path)?;
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut sessions = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let mtime = entry.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+        let mtime_ms = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as i64;
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        sessions.push(ClaudeSessionSummary { session_id: name, updated_at: mtime_ms });
+    }
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    if let Some(lim) = limit {
+        sessions.truncate(lim);
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -784,6 +822,7 @@ pub fn run() {
             get_claude_latest_session,
             get_gemini_latest_session,
             get_claude_latest_session_after,
+            get_claude_sessions,
             get_gemini_latest_session_after,
             create_session,
             write_session,
